@@ -22,7 +22,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 input[type=checkbox] { accent-color: var(--primary); }
 
-html { height: 100%; }
+html { height: 100%; background: var(--bg); }
 body {
   margin: 0;
   padding: 0;
@@ -32,9 +32,14 @@ body {
   font-size: 17px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
-  /* Fest am Viewport verankert -> kein Gummiband-/Mitscrollen, Navigation bleibt unten */
+  /* Volle Bildschirmhöhe abdecken (inkl. Home-Indikator-Zone) -> Menü sitzt an der Unterkante.
+     position:fixed verhindert Gummiband-/Mitscrollen; 100dvh reicht bis zur physischen Unterkante. */
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -291,12 +296,13 @@ hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
   display: flex;
   background: var(--bg);
   border-top: 1px solid var(--border);
-  padding-bottom: var(--safe-bottom);
+  /* bündig am unteren Rand – keine Home-Indikator-Reserve */
+  padding-bottom: 0;
 }
 .nav-btn {
   flex: 1; background: none; border: none; color: var(--muted);
   display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 9px 0 7px; font-size: 11px; font-weight: 600;
+  padding: 8px 0 4px; font-size: 11px; font-weight: 600;
 }
 .nav-btn .nav-ico { width: 24px; height: 24px; display: block; }
 .nav-btn .nav-ico svg { width: 100%; height: 100%; stroke: currentColor; fill: none; }

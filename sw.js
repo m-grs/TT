@@ -1,11 +1,11 @@
 /* Service Worker – macht die App offline nutzbar.
    Bei Änderungen an den Dateien CACHE-Version hochzählen. */
-const CACHE = "trainingstracker-v16";
+const CACHE = "trainingstracker-v20";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=16",
-  "./app.js?v=16",
+  "./styles.css?v=20",
+  "./app.js?v=20",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-180.png",
@@ -38,8 +38,20 @@ self.addEventListener("fetch", event => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // Eigene Dateien: zuerst Cache, dann Netz. Fremde (z. B. Excel-Lib vom CDN): Netz, dann Cache.
   if (url.origin === location.origin) {
+    const isHTML = req.mode === "navigate" || (req.headers.get("accept") || "").includes("text/html");
+    if (isHTML) {
+      // HTML/Seitenaufruf: ZUERST Netz (sofortige Updates), Cache nur als Offline-Fallback.
+      event.respondWith(
+        fetch(req).then(res => {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(req, copy));
+          return res;
+        }).catch(() => caches.match(req).then(c => c || caches.match("./index.html")))
+      );
+      return;
+    }
+    // Übrige eigene Dateien (per ?v=N versioniert): Cache zuerst, sonst Netz.
     event.respondWith(
       caches.match(req).then(cached => cached || fetch(req).then(res => {
         const copy = res.clone();
