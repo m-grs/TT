@@ -1,11 +1,11 @@
 /* Service Worker – macht die App offline nutzbar.
    Bei Änderungen an den Dateien CACHE-Version hochzählen. */
-const CACHE = "trainingstracker-v20";
+const CACHE = "trainingstracker-v21";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=20",
-  "./app.js?v=20",
+  "./styles.css?v=21",
+  "./app.js?v=21",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-180.png",
