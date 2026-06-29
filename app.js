@@ -143,18 +143,81 @@ function repUpperTarget(repsStr) {
   const nums = String(repsStr || "").match(/\d+/g);
   return nums ? Math.max(...nums.map(Number)) : null;
 }
-// Vorschlag +2,5 kg, wenn letztes Mal alle Soll-Sätze gemacht und überall >= 90% der oberen Ziel-Wdh
+// Liefert einen Gewichts-/Wdh-Vorschlag für die nächste Einheit.
+// Deckt mehrere Fälle ab: erster Eintrag, Ziel erreicht (+Gewicht), fast dran & drunter (Wdh steigern).
+// Rückgabe: { weight, reps, text } oder null.
 function progressionSuggestion(ex) {
-  const last = lastSessionFor(ex.key);
-  if (!last) return null;
+  const isBw = !!ex.bodyweight;
   const upper = repUpperTarget(ex.targetReps);
-  if (!upper) return null;
+  const lower = firstRepTarget(ex.targetReps);
+  const last = lastSessionFor(ex.key);
+
+  // Kein Verlauf -> Zielvorgabe als Startpunkt
+  if (!last) {
+    if (ex.targetWeight != null || ex.targetReps) {
+      return {
+        weight: isBw ? 0 : (ex.targetWeight != null ? ex.targetWeight : ""),
+        reps: lower ?? "",
+        text: "📋 Erster Eintrag – starte mit deiner Zielvorgabe.",
+      };
+    }
+    return null;
+  }
+
+  const topWeight = Math.max(...last.sets.map(s => s.weight));
+  const maxReps = Math.max(...last.sets.map(s => s.reps));
   const targetSets = ex.targetSets || last.sets.length;
   const enoughSets = last.sets.length >= targetSets;
-  const allHit = last.sets.every(s => s.reps >= 0.9 * upper);
-  if (!(enoughSets && allHit)) return null;
-  const lastWeight = Math.max(...last.sets.map(s => s.weight));
-  return { weight: lastWeight + 2.5, inc: 2.5 };
+  const inc = 2.5;
+
+  if (upper) {
+    const allHitUpper = enoughSets && last.sets.every(s => s.reps >= upper);
+    const allClose = enoughSets && last.sets.every(s => s.reps >= 0.9 * upper);
+    if (allHitUpper) {
+      return { weight: topWeight + inc, reps: lower ?? upper,
+        text: `📈 Oberes Wdh-Ziel erreicht → ${isBw ? "Zusatz " : ""}+${formatNum(inc)} kg, unten im Wdh-Bereich starten.` };
+    }
+    if (allClose) {
+      return { weight: topWeight, reps: Math.min(upper, maxReps + 1),
+        text: `🎯 Fast am Ziel – gleiches Gewicht, diesmal Richtung ${upper} Wdh.` };
+    }
+    return { weight: topWeight, reps: Math.min(upper, maxReps + 1),
+      text: `💪 Gewicht halten und auf ${upper} Wdh hinarbeiten.` };
+  }
+
+  // Kein Wdh-Ziel definiert -> eine Wdh mehr als letztes Maximum anpeilen
+  return { weight: topWeight, reps: maxReps + 1,
+    text: `📈 Versuch eine Wdh mehr als zuletzt (${maxReps}).` };
+}
+
+// Vorschlag für den nächsten Satz – aktualisiert sich nach jedem heute erfassten Satz.
+// 0 Sätze heute -> progressionSuggestion (basiert auf der letzten Einheit).
+// Ab Satz 1 -> „Double Progression": Gewicht halten; erst wenn alle Sätze das obere
+// Wdh-Ziel treffen, kommt nächstes Training +2,5 kg.
+function nextSetSuggestion(ex) {
+  const today = setsForExerciseToday(ex.key);
+  if (!today.length) return progressionSuggestion(ex);
+
+  const upper = repUpperTarget(ex.targetReps);
+  const lower = firstRepTarget(ex.targetReps);
+  const last = today[today.length - 1];
+  const n = today.length + 1;
+  const w = last.weight;
+
+  if (upper) {
+    if (last.reps >= upper) {
+      return { weight: w, reps: upper,
+        text: `📈 Satz ${n}: oberes Ziel (${upper}) geschafft – Gewicht halten; nächstes Training +2,5 kg.` };
+    }
+    if (lower != null && last.reps < lower) {
+      return { weight: w, reps: lower,
+        text: `💪 Satz ${n}: Gewicht halten, Wdh zurück Richtung ${lower}–${upper}.` };
+    }
+    return { weight: w, reps: Math.min(upper, last.reps + 1),
+      text: `🎯 Satz ${n}: Gewicht halten, eine Wdh mehr (Ziel ${lower ?? "?"}–${upper}).` };
+  }
+  // ohne Wdh-Ziel: einfach die Werte des letzten Satzes übernehmen
+  return { weight: w, reps: last.reps, text: `🎯 Satz ${n}: Werte vom letzten Satz übernommen.` };
 }
 
 /* ---------- Zeit-/Wochen-Helfer ---------- */
@@ -176,6 +239,12 @@ function mondayOfISO(iso) {
   const wd = (dt.getUTCDay() + 6) % 7; // Mo=0
   return addDaysISO(iso, -wd);
 }
+// Tage von a bis b (b - a)
+function daysBetweenISO(a, b) {
+  const [ay, am, ad] = a.split("-").map(Number), [by, bm, bd] = b.split("-").map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+}
+const MONTHS_SHORT = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 // Streak: aufeinanderfolgende Wochen, in denen das Wochenziel erreicht wurde.
 // Ohne Wochenziel: Wochen mit mind. 1 Einheit. Laufende Woche bricht die Serie nicht.
 function trainingStreak() {
@@ -378,7 +447,7 @@ function activeSession() {
   return state.activeSessionId ? state.sessions.find(s => s.id === state.activeSessionId) || null : null;
 }
 function startTraining(day) {
-  const s = { id: "s_" + todayISO() + "_" + Date.now(), dateISO: todayISO(), dayName: day || null, startTs: Date.now(), endTs: null, sets: [], extraExercises: [] };
+  const s = { id: "s_" + todayISO() + "_" + Date.now(), dateISO: todayISO(), dayName: day || null, startTs: Date.now(), endTs: null, sets: [], extraExercises: [], notes: {} };
   state.sessions.push(s);
   state.activeSessionId = s.id;
   state.activeDay = day || null;
@@ -481,6 +550,18 @@ function renderStartView() {
   // Knopf zeigt den GEWÄHLTEN Split (kann von der Empfehlung abweichen)
   $("#start-training").textContent = (days.length && selected) ? `${selected} starten` : "Training starten";
 
+  // Vorschau der Übungen im gewählten Split (ohne starten zu müssen)
+  const previewEx = exercisesForDay(days.length ? selected : null);
+  $("#start-preview-summary").textContent = `${previewEx.length} Übung${previewEx.length === 1 ? "" : "en"} ansehen`;
+  $("#start-preview-list").innerHTML = previewEx.map(e => {
+    const meta = [
+      e.targetSets ? e.targetSets + "×" : "",
+      e.targetReps ? e.targetReps + " Wdh" : "",
+      e.bodyweight ? "KG" : (e.targetWeight != null ? formatNum(e.targetWeight) + " kg" : ""),
+    ].filter(Boolean).join(" · ");
+    return `<div class="start-preview-row"><span class="spv-name">${e.name}</span><span class="spv-meta">${meta}</span></div>`;
+  }).join("");
+
   const since = state.plan && state.plan.importedAt;
   $("#plan-since").textContent = since ? `Plan aktiv seit ${relativeOrDate(since)}` : "";
 
@@ -553,15 +634,39 @@ function renderExerciseCard(ex, isExtra) {
   main.appendChild(title);
   main.appendChild(sub);
 
-  const chev = document.createElement("div");
-  chev.className = "ex-chevron";
-  chev.textContent = "›";
-
   card.appendChild(status);
   card.appendChild(main);
-  card.appendChild(chev);
+  if (isExtra) {
+    const rm = document.createElement("span");
+    rm.className = "ex-remove";
+    rm.setAttribute("role", "button");
+    rm.setAttribute("aria-label", "Übung entfernen");
+    rm.textContent = "✕";
+    rm.addEventListener("click", e => { e.stopPropagation(); removeExtraExercise(ex.id); });
+    card.appendChild(rm);
+  } else {
+    const chev = document.createElement("div");
+    chev.className = "ex-chevron";
+    chev.textContent = "›";
+    card.appendChild(chev);
+  }
   card.addEventListener("click", () => openExercise(ex.id));
   return card;
+}
+
+// für heute hinzugefügte Übung wieder entfernen
+function removeExtraExercise(id) {
+  const s = activeSession();
+  if (!s || !s.extraExercises) return;
+  const ex = s.extraExercises.find(e => e.id === id);
+  if (!ex) return;
+  const hasSets = s.sets.some(x => x.key === ex.key);
+  if (hasSets && !confirm(`„${ex.name}" entfernen? Die heute dafür erfassten Sätze werden gelöscht.`)) return;
+  s.extraExercises = s.extraExercises.filter(e => e.id !== id);
+  if (hasSets) s.sets = s.sets.filter(x => x.key !== ex.key);
+  if (s.notes) delete s.notes[ex.key];
+  saveState();
+  renderActiveTraining();
 }
 
 /* =====================================================================
@@ -570,6 +675,41 @@ function renderExerciseCard(ex, isExtra) {
 function libraryList() {
   return Object.values(state.library || {}).sort((a, b) => a.name.localeCompare(b.name));
 }
+// Übungen nach Körperregion (Muskelgruppe) gruppieren; ohne Angabe -> „Sonstige"
+function groupByMuscle(items) {
+  const groups = {};
+  items.forEach(e => { const m = (e.muscle && e.muscle.trim()) || "Sonstige"; (groups[m] = groups[m] || []).push(e); });
+  return Object.keys(groups)
+    .sort((a, b) => (a === "Sonstige") - (b === "Sonstige") || a.localeCompare(b))
+    .map(m => ({ muscle: m, items: groups[m].sort((a, b) => a.name.localeCompare(b.name)) }));
+}
+// Meta-Text einer Bibliotheks-Übung (ohne Muskelgruppe, da als Überschrift gezeigt)
+function libMeta(e) {
+  return [e.targetReps ? e.targetReps + " Wdh" : "", e.bodyweight ? "KG" : (e.targetWeight != null ? formatNum(e.targetWeight) + " kg" : "")].filter(Boolean).join(" · ");
+}
+// Bibliothek nur ansehen (aus den Einstellungen) – nach Körperregion sortiert
+function openLibraryView() {
+  const items = libraryList();
+  $("#library-view-count").textContent = items.length
+    ? `${items.length} Übung${items.length === 1 ? "" : "en"} – nach Körperregion sortiert`
+    : "Noch keine Übungen – lade zuerst einen Trainingsplan.";
+  const wrap = $("#library-view-list");
+  wrap.innerHTML = "";
+  groupByMuscle(items).forEach(g => {
+    const h = document.createElement("div");
+    h.className = "lib-group-h";
+    h.textContent = g.muscle;
+    wrap.appendChild(h);
+    g.items.forEach(e => {
+      const div = document.createElement("div");
+      div.className = "lib-item lib-item-static";
+      div.innerHTML = `<span class="lib-name">${e.name}</span><span class="lib-sub">${libMeta(e)}</span>`;
+      wrap.appendChild(div);
+    });
+  });
+  $("#library-view-overlay").classList.remove("hidden");
+}
+function closeLibraryView() { $("#library-view-overlay").classList.add("hidden"); }
 function openLibraryPicker() {
   const s = activeSession(); if (!s) return;
   const present = new Set(exercisesForDay(s.dayName).map(e => e.key).concat((s.extraExercises || []).map(e => e.key)));
@@ -579,13 +719,18 @@ function openLibraryPicker() {
     wrap.innerHTML = '<p class="muted lib-empty">Alle Übungen aus deiner Bibliothek sind heute schon dabei.</p>';
   } else {
     wrap.innerHTML = "";
-    items.forEach(e => {
-      const b = document.createElement("button");
-      b.type = "button"; b.className = "lib-item";
-      const meta = [e.muscle, e.targetReps ? e.targetReps + " Wdh" : "", e.bodyweight ? "KG" : (e.targetWeight != null ? formatNum(e.targetWeight) + " kg" : "")].filter(Boolean).join(" · ");
-      b.innerHTML = `<span class="lib-name">${e.name}</span><span class="lib-sub">${meta}</span>`;
-      b.addEventListener("click", () => addExerciseToday(e.key));
-      wrap.appendChild(b);
+    groupByMuscle(items).forEach(g => {
+      const h = document.createElement("div");
+      h.className = "lib-group-h";
+      h.textContent = g.muscle;
+      wrap.appendChild(h);
+      g.items.forEach(e => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "lib-item";
+        b.innerHTML = `<span class="lib-name">${e.name}</span><span class="lib-sub">${libMeta(e)}</span>`;
+        b.addEventListener("click", () => addExerciseToday(e.key));
+        wrap.appendChild(b);
+      });
     });
   }
   $("#library-overlay").classList.remove("hidden");
@@ -603,6 +748,48 @@ function addExerciseToday(key) {
   saveState();
   closeLibraryPicker();
   renderActiveTraining();
+}
+
+/* ---------- Eigene Übung anlegen (ohne Plan-Import) ---------- */
+let _newExAddToday = false;
+function openNewExercise(addToday) {
+  _newExAddToday = !!addToday;
+  ["nx-name", "nx-muscle", "nx-reps", "nx-sets", "nx-weight", "nx-rest"].forEach(id => { $("#" + id).value = ""; });
+  $("#nx-bw").checked = false; $("#nx-uni").checked = false;
+  $("#nx-error").hidden = true;
+  $("#newex-overlay").classList.remove("hidden");
+  setTimeout(() => $("#nx-name").focus(), 50);
+}
+function closeNewExercise() { $("#newex-overlay").classList.add("hidden"); }
+function saveCustomExercise() {
+  const name = $("#nx-name").value.trim();
+  if (!name) { const e = $("#nx-error"); e.textContent = "Bitte einen Namen eingeben."; e.hidden = false; return; }
+  const key = exerciseKey(name);
+  const sets = parseInt($("#nx-sets").value, 10);
+  const weightRaw = $("#nx-weight").value;
+  const weight = weightRaw === "" ? null : parseFloat(String(weightRaw).replace(",", "."));
+  const rest = parseInt($("#nx-rest").value, 10);
+  const bodyweight = $("#nx-bw").checked;
+  const def = {
+    key, name,
+    targetSets: Number.isFinite(sets) ? sets : null,
+    targetReps: $("#nx-reps").value.trim(),
+    targetWeight: Number.isFinite(weight) ? weight : null,
+    rest: Number.isFinite(rest) ? rest : null,
+    bodyweight,
+    unilateral: $("#nx-uni").checked,
+    muscle: $("#nx-muscle").value.trim() || null,
+  };
+  if (!state.library) state.library = {};
+  state.library[key] = def;
+  saveState();
+  closeNewExercise();
+  if (_newExAddToday && activeSession()) {
+    closeLibraryPicker();
+    addExerciseToday(key);
+  } else if (!$("#library-view-overlay").classList.contains("hidden")) {
+    openLibraryView();   // Liste in der Einstellungen-Ansicht aktualisieren
+  }
 }
 
 /* =====================================================================
@@ -802,6 +989,7 @@ function openExercise(id) {
   const ex = findExercise(id);
   if (!ex) return;
   currentExercise = ex;
+  editingSetTs = null;
 
   $("#ex-name").textContent = ex.name;
 
@@ -853,25 +1041,61 @@ function openExercise(id) {
     lastEl.innerHTML = "";
   }
 
-  // Progressions-Vorschlag (nur wenn heute noch kein Satz dieser Übung erfasst)
-  const sugg = setsForExerciseToday(ex.key).length === 0 ? progressionSuggestion(ex) : null;
-  const lv = state.lastValues[ex.key];
-  const progHint = $("#prog-hint");
-  let startWeight = lv ? lv.weight : (ex.bodyweight ? 0 : (ex.targetWeight != null ? ex.targetWeight : ""));
-  let startReps = lv ? lv.reps : (firstRepTarget(ex.targetReps) ?? "");
-  if (sugg) {
-    startWeight = sugg.weight;
-    startReps = firstRepTarget(ex.targetReps) ?? startReps;  // bei mehr Gewicht im unteren Wdh-Bereich starten
-    progHint.classList.remove("hidden");
-    progHint.textContent = `📈 Vorschlag: ${ex.bodyweight ? "Zusatz " : ""}${formatNum(sugg.weight)} kg (letztes Mal Ziel erreicht → +${formatNum(sugg.inc)} kg)`;
-  } else {
-    progHint.classList.add("hidden");
-  }
-  $("#in-weight").value = startWeight === "" ? "" : startWeight;
-  $("#in-reps").value = startReps === "" ? "" : startReps;
+  // Vorschlag für den nächsten Satz (aktualisiert sich nach jedem gespeicherten Satz)
+  refreshSuggestion(ex);
+  updateNoteButton();
 
   renderTodaySets();
   showScreen("screen-exercise");
+}
+
+// Setzt Eingabefelder + Hinweis auf den Vorschlag für den NÄCHSTEN Satz
+function refreshSuggestion(ex) {
+  const sugg = nextSetSuggestion(ex);
+  const lv = state.lastValues[ex.key];
+  let w = lv ? lv.weight : (ex.bodyweight ? 0 : (ex.targetWeight != null ? ex.targetWeight : ""));
+  let r = lv ? lv.reps : (firstRepTarget(ex.targetReps) ?? "");
+  const progHint = $("#prog-hint");
+  if (sugg) {
+    if (sugg.weight !== "" && sugg.weight != null) w = sugg.weight;
+    if (sugg.reps !== "" && sugg.reps != null) r = sugg.reps;
+    progHint.classList.remove("hidden");
+    progHint.textContent = sugg.text;
+  } else {
+    progHint.classList.add("hidden");
+  }
+  $("#in-weight").value = w === "" ? "" : w;
+  $("#in-reps").value = r === "" ? "" : r;
+}
+
+// Notiz-Fenster öffnen – Notiz pro Übung & Einheit; lädt nur die heutige, nichts von anderen Tagen
+function openNoteModal() {
+  const sess = activeSession();
+  if (!sess || !currentExercise) return;
+  $("#note-title").textContent = "Notiz · " + currentExercise.name;
+  $("#ex-note").value = (sess.notes && sess.notes[currentExercise.key]) || "";
+  $("#note-overlay").classList.remove("hidden");
+  setTimeout(() => $("#ex-note").focus(), 50);
+}
+function closeNoteModal() { $("#note-overlay").classList.add("hidden"); }
+
+// Notiz der aktuellen Übung in der laufenden Einheit speichern (nur für die Auswertung/CSV)
+function saveExerciseNote() {
+  const sess = activeSession();
+  if (!sess || !currentExercise) { closeNoteModal(); return; }
+  if (!sess.notes) sess.notes = {};
+  const txt = $("#ex-note").value.trim();
+  if (txt) sess.notes[currentExercise.key] = txt;
+  else delete sess.notes[currentExercise.key];
+  saveState();
+  updateNoteButton();
+  closeNoteModal();
+}
+// Button-Beschriftung je nachdem, ob für DIESE Übung HEUTE schon eine Notiz existiert
+function updateNoteButton() {
+  const sess = activeSession();
+  const has = !!(sess && currentExercise && sess.notes && sess.notes[currentExercise.key]);
+  $("#open-note").textContent = has ? "📝 Notiz bearbeiten" : "📝 Notiz";
 }
 
 function firstRepTarget(repsStr) {
@@ -879,24 +1103,61 @@ function firstRepTarget(repsStr) {
   return m ? parseInt(m[0], 10) : null;
 }
 
+let editingSetTs = null;
 function renderTodaySets() {
   const wrap = $("#today-sets");
   const sets = setsForExerciseToday(currentExercise.key);
-  if (!sets.length) {
-    wrap.innerHTML = '<p class="no-sets">Noch kein Satz erfasst. Trag Gewicht & Wiederholungen ein und tippe „Satz speichern“.</p>';
-    return;
-  }
   wrap.innerHTML = "";
   sets.forEach((s, i) => {
     const row = document.createElement("div");
     row.className = "set-row";
-    row.innerHTML =
-      `<span class="set-num">${i + 1}</span>` +
-      `<span class="set-val">${setLong(s)}</span>` +
-      `<button type="button" class="set-del" aria-label="Satz löschen">✕</button>`;
-    row.querySelector(".set-del").addEventListener("click", () => deleteSet(s.ts));
+    if (editingSetTs === s.ts) {
+      row.classList.add("editing");
+      const wLabel = s.bw != null ? "Zusatz" : "kg";
+      row.innerHTML =
+        `<span class="set-num">${i + 1}</span>` +
+        `<div class="set-edit">` +
+          `<input class="set-edit-w" type="number" inputmode="decimal" step="0.5" value="${s.weight}" aria-label="${wLabel}" />` +
+          `<span class="set-edit-x">×</span>` +
+          `<input class="set-edit-r" type="number" inputmode="numeric" step="1" min="0" value="${s.reps}" aria-label="Wiederholungen" />` +
+        `</div>` +
+        `<button type="button" class="set-save" aria-label="Speichern">✓</button>`;
+      row.querySelector(".set-save").addEventListener("click", () => {
+        const w = parseFloat(String(row.querySelector(".set-edit-w").value).replace(",", "."));
+        const r = parseInt(row.querySelector(".set-edit-r").value, 10);
+        commitSetEdit(s.ts, Number.isFinite(w) ? w : 0, r);
+      });
+    } else {
+      row.innerHTML =
+        `<span class="set-num">${i + 1}</span>` +
+        `<button type="button" class="set-val set-val-btn">${setLong(s)}</button>` +
+        `<button type="button" class="set-del" aria-label="Satz löschen">✕</button>`;
+      row.querySelector(".set-val-btn").addEventListener("click", () => { editingSetTs = s.ts; renderTodaySets(); });
+      row.querySelector(".set-del").addEventListener("click", () => deleteSet(s.ts));
+    }
     wrap.appendChild(row);
   });
+}
+
+// bereits gespeicherten Satz nachträglich ändern
+function commitSetEdit(ts, weight, reps) {
+  const session = activeSession();
+  if (!session) { editingSetTs = null; renderTodaySets(); return; }
+  if (!Number.isFinite(reps) || reps <= 0) { flashEditRow(ts); return; }
+  const s = session.sets.find(x => x.ts === ts);
+  if (s) {
+    s.weight = weight;
+    s.reps = reps;
+    state.lastValues[s.key] = { weight, reps };
+  }
+  editingSetTs = null;
+  saveState();
+  renderTodaySets();
+  if (currentExercise) refreshSuggestion(currentExercise);
+}
+function flashEditRow(ts) {
+  const inp = document.querySelector(".set-row.editing .set-edit-r");
+  if (inp) { inp.style.borderColor = "var(--danger)"; inp.focus(); setTimeout(() => inp.style.borderColor = "", 800); }
 }
 
 function saveSet() {
@@ -924,6 +1185,7 @@ function saveSet() {
   saveState();
 
   renderTodaySets();
+  refreshSuggestion(ex);   // Vorschlag + Eingabefelder für den nächsten Satz aktualisieren
 
   // Neuer Rekord? (nur wenn es vorher schon einen gab -> nicht beim allerersten Satz)
   let prText = null;
@@ -944,6 +1206,7 @@ function deleteSet(ts) {
     .sort((a, b) => a.ts - b.ts).forEach(s => { s.setIndex = idx++; });
   saveState();
   renderTodaySets();
+  refreshSuggestion(currentExercise);
 }
 
 function flashField(sel) {
@@ -954,120 +1217,70 @@ function flashField(sel) {
 }
 
 /* =====================================================================
-   PAUSEN-TIMER (+ Satz-Ziel-Abfrage)
+   PAUSEN-TIMER – kleiner schwebender Timer unten rechts (blockiert nicht)
    ===================================================================== */
-let restTimer = null, restRemaining = 0, restTotal = 0, restChoiceMode = false, restEndTs = 0, restRunning = false;
-let restMinimized = false, restExerciseId = null;
-const RING_CIRC = 2 * Math.PI * 54;
-const MINI_CIRC = 2 * Math.PI * 15;
+let restTimer = null, restRemaining = 0, restTotal = 0, restEndTs = 0, restRunning = false, restEnded = false;
+const MINI_CIRC = 2 * Math.PI * 19;
 
-function startRest(seconds, choiceMode, prText) {
-  restChoiceMode = !!choiceMode;
-  restMinimized = false;
-  restExerciseId = currentExercise ? currentExercise.id : null;
-  $("#rest-mini").classList.add("hidden");
-  const overlay = $("#rest-overlay");
-  overlay.classList.remove("hidden", "ending");
-  const pr = $("#rest-pr");
+function startRest(seconds, _choiceMode, prText) {
+  restEnded = false;
+  const mini = $("#rest-mini");
+  mini.classList.remove("overtime");
+  $("#rest-mini-fg").style.strokeDasharray = MINI_CIRC;
   if (prText) {
-    pr.classList.remove("hidden");
-    pr.textContent = prText;
+    showBackupToast(prText);   // neuer Rekord als kurzer Hinweis (blockiert nicht)
     if (state.settings.vibrate && navigator.vibrate) navigator.vibrate([30, 50, 30, 50, 150]);
-  } else {
-    pr.classList.add("hidden");
   }
-  $("#rest-label").textContent = "Pause";
-  $(".rest-actions").classList.toggle("hidden", restChoiceMode);
-  $(".rest-choice").classList.toggle("hidden", !restChoiceMode);
-  $("#ring-fg").style.strokeDasharray = RING_CIRC;
-
   clearInterval(restTimer); restTimer = null; restRunning = false;
-  if (!seconds || seconds <= 0) {       // keine Pause -> nur Abfrage zeigen (falls nötig)
-    restTotal = 0; restRemaining = 0; updateRestUI();
-    $("#rest-adjust").classList.add("hidden");
-    if (!restChoiceMode) { overlay.classList.add("hidden"); }
-    return;
-  }
-  $("#rest-adjust").classList.toggle("hidden", restChoiceMode);
+  if (!seconds || seconds <= 0) { mini.classList.add("hidden"); return; }
   // Echtzeit-basiert (Ziel-Zeitstempel) -> übersteht Sperren/App-Wechsel korrekt
   restTotal = seconds; restRemaining = seconds; restEndTs = Date.now() + seconds * 1000; restRunning = true;
+  mini.classList.remove("hidden");
   updateRestUI();
   restTimer = setInterval(tickRest, 250);
 }
 function tickRest() {
   if (!restRunning) return;
-  restRemaining = Math.max(0, Math.ceil((restEndTs - Date.now()) / 1000));
+  const diffMs = restEndTs - Date.now();
+  if (diffMs <= 0 && !restEnded) onRestZero();   // einmalig bei 00:00
+  restRemaining = Math.ceil(diffMs / 1000);      // läuft ins Negative weiter (Overtime)
   updateRestUI();
-  if (Date.now() >= restEndTs) finishRest();
+}
+
+// genau bei 00:00: kurzes grünes Aufleuchten + Signal, Timer läuft danach negativ in Pink weiter
+function onRestZero() {
+  restEnded = true;
+  notifyRestEnd();
+  const f = $("#screen-flash");
+  f.classList.remove("show");
+  void f.offsetWidth;               // Animation neu starten
+  f.classList.add("show");
+  setTimeout(() => f.classList.remove("show"), 650);
 }
 
 function updateRestUI() {
-  const t = Math.max(0, restRemaining);
-  const mm = Math.floor(t / 60), ss = t % 60;
-  const label = mm > 0 ? `${mm}:${String(ss).padStart(2, "0")}` : String(ss);
-  const frac = restTotal > 0 ? t / restTotal : 0;
-  $("#rest-time").textContent = label;
-  $("#ring-fg").style.strokeDashoffset = RING_CIRC * (1 - frac);
-  $("#rest-overlay").classList.toggle("ending", t <= 3 && t > 0);
-  // Mini-Timer (im Hintergrund)
-  $("#rest-mini-time").textContent = label;
-  $("#rest-mini-fg").style.strokeDasharray = MINI_CIRC;
-  $("#rest-mini-fg").style.strokeDashoffset = MINI_CIRC * (1 - frac);
-  $("#rest-mini").classList.toggle("ending", t <= 3 && t > 0);
-}
-
-// Pause in den Hintergrund (kleines schwebendes Feld) -> navigieren möglich
-function minimizeRest() {
-  if (!restRunning) return;
-  restMinimized = true;
-  $("#rest-overlay").classList.add("hidden");
-  $("#rest-mini").classList.remove("hidden");
-  updateRestUI();
-}
-function expandRest() {
-  restMinimized = false;
-  $("#rest-mini").classList.add("hidden");
-  $("#rest-overlay").classList.remove("hidden");
-  updateRestUI();
-}
-
-// Pause während des Laufens verlängern/verkürzen
-function adjustRest(delta) {
-  if (!restRunning) return;
-  const rem = Math.max(5, restRemaining + delta);
-  restRemaining = rem;
-  restEndTs = Date.now() + rem * 1000;
-  if (rem > restTotal) restTotal = rem;
-  updateRestUI();
-  if (state.settings.vibrate && navigator.vibrate) navigator.vibrate(12);
-}
-
-function finishRest() {
-  if (!restRunning) return;     // Doppel-Auslösung vermeiden
-  restRunning = false;
-  clearInterval(restTimer); restTimer = null;
-  notifyRestEnd();
-  $("#rest-mini").classList.add("hidden");
-  $("#rest-adjust").classList.add("hidden");
-  // Zur pausierten Übung zurückspringen (falls weg-navigiert / minimiert)
-  if (restExerciseId && (restMinimized || !$("#screen-exercise").classList.contains("active")) && findExercise(restExerciseId)) {
-    openExercise(restExerciseId);
-  }
-  restMinimized = false;
-  if (restChoiceMode) {           // Abfrage stehen lassen
-    $("#rest-overlay").classList.remove("hidden");
-    $("#rest-label").textContent = "Pause vorbei";
-    $("#rest-time").textContent = "0";
-    $("#ring-fg").style.strokeDashoffset = RING_CIRC;
+  const t = restRemaining;
+  const over = t < 0;
+  let label;
+  if (over) {
+    const a = -t;
+    label = "−" + Math.floor(a / 60) + ":" + String(a % 60).padStart(2, "0");
   } else {
-    // kurzer „vorbei"-Hinweis im Vollbild, schließt sich nicht von selbst
-    $("#rest-overlay").classList.remove("hidden");
-    $("#rest-label").textContent = "Pause vorbei";
-    $("#rest-time").textContent = "0";
-    $("#ring-fg").style.strokeDashoffset = RING_CIRC;
+    const mm = Math.floor(t / 60), ss = t % 60;
+    label = mm > 0 ? `${mm}:${String(ss).padStart(2, "0")}` : String(ss);
   }
+  const frac = over ? 1 : (restTotal > 0 ? t / restTotal : 0);
+  $("#rest-mini-time").textContent = label;
+  $("#rest-mini-fg").style.strokeDashoffset = MINI_CIRC * (1 - frac);
+  $("#rest-mini").classList.toggle("overtime", over);
 }
-function stopRest() { restRunning = false; restMinimized = false; clearInterval(restTimer); restTimer = null; $("#rest-overlay").classList.add("hidden"); $("#rest-mini").classList.add("hidden"); }
+
+function stopRest() {
+  restRunning = false; restEnded = false;
+  clearInterval(restTimer); restTimer = null;
+  $("#rest-mini").classList.add("hidden");
+  $("#rest-mini").classList.remove("overtime");
+}
 
 function notifyRestEnd() {
   if (state.settings.vibrate && navigator.vibrate) navigator.vibrate([200, 80, 200]);
@@ -1203,11 +1416,123 @@ function renderPRList() {
   const items = allLoggedExercises()
     .map(e => ({ name: e.name, rec: exerciseRecord(e.key) }))
     .filter(x => x.rec)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => b.rec.dateISO.localeCompare(a.rec.dateISO) || a.name.localeCompare(b.name)); // neueste Rekorde zuerst
   if (!items.length) { wrap.innerHTML = ""; return; }
   wrap.innerHTML = `<h3 class="section-h">🏆 Bestleistungen</h3><div class="pr-list-inner">` +
     items.map(it => `<div class="pr-row"><span class="pr-name">${it.name}</span><span class="pr-val">${recordValueText(it.rec.set)}</span><span class="pr-date">${relativeOrDate(it.rec.dateISO)}</span></div>`).join("") +
     `</div>`;
+}
+
+/* ---------- Kalender-Heatmap der Trainingstage ---------- */
+function dayVolumeMap() {
+  const m = {};
+  state.sessions.forEach(s => {
+    if (!s.sets.length) return;
+    const v = s.sets.reduce((a, x) => a + setVolume(x), 0);
+    m[s.dateISO] = (m[s.dateISO] || 0) + v;
+  });
+  return m;
+}
+function renderHeatmap() {
+  const wrap = $("#cal-heatmap");
+  if (!wrap) return;
+  const vol = dayVolumeMap();
+  if (!Object.keys(vol).length) { wrap.innerHTML = ""; return; }
+  const weeks = 18, cell = 15, gap = 3, rows = 7;
+  const startMon = addDaysISO(mondayOfISO(todayISO()), -7 * (weeks - 1));
+  const maxV = Math.max(...Object.values(vol));
+  const today = todayISO();
+  const W = weeks * (cell + gap), H = rows * (cell + gap);
+  let rects = "", monthLabels = "", lastMonth = "";
+  for (let c = 0; c < weeks; c++) {
+    const colMon = addDaysISO(startMon, c * 7);
+    const mo = colMon.slice(5, 7);
+    if (mo !== lastMonth) { monthLabels += `<text x="${c * (cell + gap)}" y="-3" class="hm-mon">${MONTHS_SHORT[+mo - 1]}</text>`; lastMonth = mo; }
+    for (let r = 0; r < rows; r++) {
+      const d = addDaysISO(colMon, r);
+      if (d > today) continue;
+      const v = vol[d] || 0;
+      const lvl = v === 0 ? 0 : v < maxV * 0.25 ? 1 : v < maxV * 0.5 ? 2 : v < maxV * 0.75 ? 3 : 4;
+      const title = formatDateDE(d) + (v ? " · " + formatNum(Math.round(v)) + " kg" : " · frei");
+      rects += `<rect x="${c * (cell + gap)}" y="${r * (cell + gap)}" width="${cell}" height="${cell}" rx="3" class="hm hm-${lvl}"><title>${title}</title></rect>`;
+    }
+  }
+  wrap.innerHTML = `<h3 class="section-h">📅 Trainingstage (18 Wochen)</h3>
+    <div class="hm-scroll"><svg viewBox="0 -14 ${W} ${H + 14}" width="${W}" height="${H + 14}" class="hm-svg">${monthLabels}${rects}</svg></div>`;
+}
+
+/* ---------- Wochenvolumen pro Muskelgruppe (Trend, Übertraining/Lücken) ---------- */
+function renderMuscleTrend() {
+  const wrap = $("#muscle-trend");
+  if (!wrap) return;
+  const weeks = 4;
+  const startMon = addDaysISO(mondayOfISO(todayISO()), -7 * (weeks - 1));
+  const data = {};
+  state.sessions.forEach(s => {
+    const wkIdx = Math.round(daysBetweenISO(startMon, mondayOfISO(s.dateISO)) / 7);
+    if (wkIdx < 0 || wkIdx >= weeks) return;
+    s.sets.forEach(x => {
+      const m = x.muscle || "Sonstige";
+      (data[m] = data[m] || Array(weeks).fill(0))[wkIdx] += setVolume(x);
+    });
+  });
+  const muscles = Object.keys(data);
+  if (!muscles.length) { wrap.innerHTML = ""; return; }
+  const globalMax = Math.max(...muscles.flatMap(m => data[m]));
+  // nach Volumen der aktuellen Woche sortieren
+  muscles.sort((a, b) => data[b][weeks - 1] - data[a][weeks - 1]);
+
+  const rowsHtml = muscles.map(m => {
+    const w = data[m];
+    const cur = w[weeks - 1];
+    const prevAvg = (w.slice(0, weeks - 1).reduce((a, b) => a + b, 0)) / (weeks - 1);
+    let trend;
+    if (cur === 0) trend = `<span class="mt-flag mt-gap">💤 Lücke</span>`;
+    else if (prevAvg > 0 && cur > prevAvg * 1.5) trend = `<span class="mt-flag mt-over">⚠︎ stark hoch</span>`;
+    else if (cur > prevAvg * 1.05) trend = `<span class="tr-up">▲</span>`;
+    else if (cur < prevAvg * 0.95) trend = `<span class="tr-down">▼</span>`;
+    else trend = `<span class="tr-flat">▬</span>`;
+    const bars = w.map((v, i) => {
+      const h = globalMax > 0 ? Math.round(v / globalMax * 100) : 0;
+      return `<span class="mt-bar ${i === weeks - 1 ? "mt-bar-cur" : ""}" style="height:${Math.max(3, h)}%" title="Woche -${weeks - 1 - i}: ${formatNum(Math.round(v))} kg"></span>`;
+    }).join("");
+    return `<div class="mt-row"><span class="mt-name">${m}</span><div class="mt-bars">${bars}</div><span class="mt-cur">${formatNum(Math.round(cur))} kg</span>${trend}</div>`;
+  }).join("");
+
+  wrap.innerHTML = `<h3 class="section-h">💪 Wochenvolumen pro Muskelgruppe</h3>
+    <div class="mt-card"><p class="mt-legend">Letzte 4 Wochen · rechter Balken = diese Woche</p>${rowsHtml}</div>`;
+}
+
+/* ---------- Persönliche Rekord-Historie pro Übung ---------- */
+// Liste aller Meilensteine, an denen ein neuer Bestwert (Score) erreicht wurde – chronologisch.
+function prHistory(key) {
+  const sessions = state.sessions
+    .filter(s => s.sets.some(x => x.key === key))
+    .slice().sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+  let best = -Infinity;
+  const hist = [];
+  sessions.forEach(s => {
+    let bestSet = null, bestSc = -Infinity;
+    s.sets.filter(x => x.key === key).forEach(x => { const sc = setScore(x); if (sc > bestSc) { bestSc = sc; bestSet = x; } });
+    if (bestSet && bestSc > best + 1e-9) { best = bestSc; hist.push({ dateISO: s.dateISO, set: bestSet }); }
+  });
+  return hist;
+}
+function renderPRHistory(key) {
+  const wrap = $("#pr-history");
+  if (!wrap) return;
+  if (key === "__bw__" || key === "__duration__") { wrap.innerHTML = ""; return; }
+  const hist = prHistory(key);
+  if (hist.length < 1) { wrap.innerHTML = ""; return; }
+  const rows = hist.slice().reverse().map((h, i) => {
+    const isCurrent = i === 0;
+    return `<div class="prh-row${isCurrent ? " prh-current" : ""}">` +
+      `<span class="prh-medal">${isCurrent ? "🏆" : "•"}</span>` +
+      `<span class="prh-val">${recordValueText(h.set)}</span>` +
+      `<span class="prh-detail muted">${setShort(h.set)}</span>` +
+      `<span class="prh-date">${relativeOrDate(h.dateISO)}</span></div>`;
+  }).join("");
+  wrap.innerHTML = `<h3 class="section-h">🏅 Rekord-Verlauf</h3><div class="prh-list">${rows}</div>`;
 }
 
 function statsSeries(key, metric) {
@@ -1241,6 +1566,7 @@ function drawChart() {
   $("#metric-label").style.display = (isBW || isDuration) ? "none" : "";
   $("#stats-metric").style.display = (isBW || isDuration) ? "none" : "";
   const metric = (isBW || isDuration) ? "topweight" : $("#stats-metric").value;
+  renderPRHistory(key);
   const series = statsSeries(key, metric);
   const wrap = $("#chart-wrap");
   if (!series.length) { wrap.innerHTML = '<p class="chart-empty">Keine Daten für diese Übung.</p>'; $("#stats-table").innerHTML = ""; return; }
@@ -1295,13 +1621,14 @@ function renderStatsTable(series, metric, key) {
 }
 
 function exportCSV() {
-  const rows = [["Datum", "Tag", "Übung", "Satz", "Gewicht_kg", "Körpergewicht", "Zusatz_kg", "Wiederholungen", "Einseitig", "Volumen_kg"]];
+  const rows = [["Datum", "Tag", "Übung", "Satz", "Gewicht_kg", "Körpergewicht", "Zusatz_kg", "Wiederholungen", "Einseitig", "Volumen_kg", "Notiz"]];
   state.sessions.slice().sort((a, b) => a.dateISO.localeCompare(b.dateISO)).forEach(s => {
     s.sets.slice().sort((a, b) => a.ts - b.ts).forEach(set => {
       const eff = effWeight(set);
+      const note = (s.notes && s.notes[set.key]) ? s.notes[set.key] : "";
       rows.push([s.dateISO, set.day || s.dayName || "", set.exerciseName, set.setIndex + 1,
         String(eff).replace(".", ","), set.bw != null ? "ja" : "nein", String(set.weight).replace(".", ","),
-        set.reps, set.uni ? "ja" : "nein", String(Math.round(setVolume(set) * 10) / 10).replace(".", ",")]);
+        set.reps, set.uni ? "ja" : "nein", String(Math.round(setVolume(set) * 10) / 10).replace(".", ","), note]);
     });
   });
   if (rows.length === 1) { alert("Noch keine Daten zum Exportieren vorhanden."); return; }
@@ -1475,7 +1802,7 @@ function showScreen(id) {
   $("#header-title").textContent = titles[id] ?? "Training";
   if (id !== "screen-home") stopElapsed();
   if (id === "screen-home") renderHome();
-  if (id === "screen-stats") { renderWeekOverview(); renderStats(); }
+  if (id === "screen-stats") { renderWeekOverview(); renderHeatmap(); renderMuscleTrend(); renderStats(); }
   if (id === "screen-history") renderHistory();
   if (id === "screen-settings") syncSettingsUI();
   const main = $("#main"); if (main) main.scrollTop = 0;
@@ -1522,6 +1849,16 @@ function bindEvents() {
   $("#add-exercise").addEventListener("click", openLibraryPicker);
   $("#library-close").addEventListener("click", closeLibraryPicker);
 
+  // Bibliothek ansehen (Einstellungen)
+  $("#show-library").addEventListener("click", openLibraryView);
+  $("#library-view-close").addEventListener("click", closeLibraryView);
+
+  // Eigene Übung anlegen
+  $("#lib-new").addEventListener("click", () => openNewExercise(true));      // aus Picker -> auch heute hinzufügen
+  $("#libview-new").addEventListener("click", () => openNewExercise(false)); // aus Einstellungen -> nur Bibliothek
+  $("#newex-save").addEventListener("click", saveCustomExercise);
+  $("#newex-cancel").addEventListener("click", closeNewExercise);
+
   // Backup speichern / laden
   $("#backup-save").addEventListener("click", () => autoBackup(true));
   $("#backup-load").addEventListener("click", () => $("#backup-input").click());
@@ -1538,14 +1875,13 @@ function bindEvents() {
 
   // Zusammenfassung
   $("#summary-done").addEventListener("click", () => showScreen("screen-home"));
-  $("#summary-close").addEventListener("click", () => {
-    try { window.close(); } catch (e) {}
-    setTimeout(() => { $("#summary-close").textContent = "Du kannst die App jetzt schließen 👋"; }, 300);
-  });
 
   // Übungsdetail
   $("#exercise-back").addEventListener("click", () => showScreen("screen-home"));
   $("#save-set").addEventListener("click", saveSet);
+  $("#open-note").addEventListener("click", openNoteModal);
+  $("#note-save").addEventListener("click", saveExerciseNote);
+  $("#note-cancel").addEventListener("click", closeNoteModal);
   $$(".step").forEach(b => b.addEventListener("click", () => {
     const input = $("#" + b.dataset.target), delta = parseFloat(b.dataset.delta);
     let next = (parseFloat(String(input.value).replace(",", ".")) || 0) + delta;
@@ -1554,16 +1890,8 @@ function bindEvents() {
     input.value = Number.isInteger(next) ? next : Math.round(next * 100) / 100;
   }));
 
-  // Pausen-Timer
-  $("#rest-skip").addEventListener("click", stopRest);
-  $("#rest-next-set").addEventListener("click", stopRest);
-  $("#rest-next-exercise").addEventListener("click", () => { stopRest(); showScreen("screen-home"); });
-  $("#rest-minimize").addEventListener("click", minimizeRest);
-  $("#rest-mini").addEventListener("click", expandRest);
-  $("#rest-minus").addEventListener("click", () => adjustRest(-15));
-  $("#rest-plus").addEventListener("click", () => adjustRest(15));
-  // Tippen auf den abgedunkelten Hintergrund schickt die Pause in den Hintergrund
-  $("#rest-overlay").addEventListener("click", e => { if (e.target === $("#rest-overlay")) minimizeRest(); });
+  // Pausen-Timer (kleiner Eck-Timer; Tippen beendet die Pause)
+  $("#rest-mini").addEventListener("click", stopRest);
 
   // Auswertung
   $("#stats-exercise").addEventListener("change", drawChart);

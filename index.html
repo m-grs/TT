@@ -15,7 +15,7 @@
   <link rel="icon" href="icon-512.png" sizes="512x512" type="image/png" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
 
-  <link rel="stylesheet" href="styles.css?v=21" />
+  <link rel="stylesheet" href="styles.css?v=27" />
 </head>
 <body>
   <!-- ========================= Kopfzeile ========================= -->
@@ -69,6 +69,10 @@
           <p class="muted small">Anderen Split wählen:</p>
           <div id="start-day-chips" class="day-picker"></div>
         </div>
+        <details id="start-preview" class="start-preview">
+          <summary id="start-preview-summary">Übungen ansehen</summary>
+          <div id="start-preview-list" class="start-preview-list"></div>
+        </details>
         <button type="button" id="start-training" class="btn btn-primary btn-block btn-lg">Training starten</button>
         <div class="plan-actions">
           <button type="button" id="reimport-plan" class="btn btn-ghost btn-small">Neuen Plan laden</button>
@@ -127,12 +131,16 @@
 
         <h3 class="sets-heading">Sätze heute</h3>
         <div id="today-sets" class="today-sets"></div>
+
+        <button type="button" id="open-note" class="btn btn-ghost btn-block ex-note-btn">📝 Notiz</button>
       </div>
     </section>
 
     <!-- ---------- Auswertung ---------- -->
     <section id="screen-stats" class="screen">
       <div id="week-overview" class="week-overview"></div>
+      <div id="cal-heatmap" class="cal-heatmap"></div>
+      <div id="muscle-trend" class="muscle-trend"></div>
       <h3 class="section-h">Verlauf pro Übung</h3>
       <div class="stats-controls">
         <label for="stats-exercise">Übung</label>
@@ -146,6 +154,7 @@
       </div>
       <div id="chart-wrap" class="chart-wrap"></div>
       <div id="stats-table" class="stats-table"></div>
+      <div id="pr-history" class="pr-history"></div>
       <div id="pr-list" class="pr-list"></div>
       <button type="button" id="export-csv" class="btn btn-primary btn-block">Alle Daten als CSV exportieren</button>
     </section>
@@ -180,6 +189,8 @@
           <label for="set-keepawake">Bildschirm beim Training anlassen</label>
           <input id="set-keepawake" type="checkbox" />
         </div>
+        <button type="button" id="show-library" class="btn btn-ghost btn-block">Übungs-Bibliothek anzeigen</button>
+        <p class="setting-hint">Alle Übungen, die jemals in einem Plan geladen wurden.</p>
       </div>
 
       <!-- Pause & Signale -->
@@ -242,7 +253,6 @@
       </div>
       <div id="summary-body" class="summary-body"></div>
       <button type="button" id="summary-done" class="btn btn-primary btn-block btn-lg">Fertig</button>
-      <button type="button" id="summary-close" class="btn btn-ghost btn-block">App schließen</button>
     </section>
 
   </main>
@@ -263,42 +273,15 @@
     </button>
   </nav>
 
-  <!-- ========================= Pausen-Timer Overlay ========================= -->
-  <div id="rest-overlay" class="rest-overlay hidden">
-    <div class="rest-box">
-      <div id="rest-pr" class="rest-pr hidden"></div>
-      <p class="rest-label" id="rest-label">Pause</p>
-      <div class="rest-ring">
-        <svg viewBox="0 0 120 120" class="ring-svg">
-          <circle class="ring-bg" cx="60" cy="60" r="54" />
-          <circle class="ring-fg" id="ring-fg" cx="60" cy="60" r="54" />
-        </svg>
-        <div class="rest-time" id="rest-time">90</div>
-      </div>
-      <!-- Pause schnell anpassen -->
-      <div class="rest-adjust" id="rest-adjust">
-        <button type="button" id="rest-minus" class="rest-adjust-btn">−15s</button>
-        <button type="button" id="rest-plus" class="rest-adjust-btn">+15s</button>
-      </div>
-      <!-- Standard: einfaches Weiter -->
-      <div class="rest-actions">
-        <button type="button" class="btn btn-primary btn-block" id="rest-skip">Weiter</button>
-      </div>
-      <!-- Nach erreichtem Satz-Ziel: Auswahl -->
-      <div class="rest-choice hidden">
-        <p class="rest-choice-hint" id="rest-choice-hint">Satz-Ziel erreicht</p>
-        <button type="button" class="btn btn-ghost btn-block" id="rest-next-set">Weiterer Satz</button>
-        <button type="button" class="btn btn-primary btn-block" id="rest-next-exercise">Nächste Übung</button>
-      </div>
-      <button type="button" class="rest-minimize" id="rest-minimize">↓ Im Hintergrund weiterlaufen</button>
-    </div>
-  </div>
-
-  <!-- Schwebender Mini-Timer (wenn Pause im Hintergrund läuft) -->
-  <button type="button" id="rest-mini" class="rest-mini hidden">
-    <span class="rest-mini-ring"><svg viewBox="0 0 36 36"><circle class="rm-bg" cx="18" cy="18" r="15"/><circle class="rm-fg" id="rest-mini-fg" cx="18" cy="18" r="15"/></svg></span>
-    <span class="rest-mini-text"><b id="rest-mini-time">0:00</b><span>Pause</span></span>
+  <!-- ========================= Pausen-Timer (kleiner schwebender Timer) ========================= -->
+  <button type="button" id="rest-mini" class="rest-mini hidden" aria-label="Pause beenden">
+    <span class="rest-mini-ring">
+      <svg viewBox="0 0 44 44"><circle class="rm-bg" cx="22" cy="22" r="19"/><circle class="rm-fg" id="rest-mini-fg" cx="22" cy="22" r="19"/></svg>
+      <span class="rest-mini-time" id="rest-mini-time">90</span>
+    </span>
   </button>
+  <!-- grünes Aufleuchten am Pausenende (blockiert nicht) -->
+  <div id="screen-flash" class="screen-flash"></div>
 
   <!-- ========================= Beenden-Bestätigung ========================= -->
   <div id="finish-overlay" class="modal-overlay hidden">
@@ -326,10 +309,56 @@
       <p class="modal-title">Übung für heute hinzufügen</p>
       <p class="modal-text">Aus deiner Bibliothek – gilt nur für das heutige Training, nicht für den Plan.</p>
       <div id="library-list" class="library-list"></div>
+      <button type="button" id="lib-new" class="btn btn-ghost btn-block">+ Eigene Übung anlegen</button>
       <button type="button" id="library-close" class="btn btn-ghost btn-block">Schließen</button>
     </div>
   </div>
 
-  <script src="app.js?v=21"></script>
+  <!-- ========================= Notiz-Fenster ========================= -->
+  <div id="note-overlay" class="modal-overlay hidden">
+    <div class="modal-box">
+      <p class="modal-title" id="note-title">Notiz</p>
+      <textarea id="ex-note" rows="4" placeholder="z. B. enger Griff, Sitz Stufe 4, heute erkältet … (nur für die Auswertung/CSV)"></textarea>
+      <button type="button" id="note-save" class="btn btn-primary btn-block">Speichern</button>
+      <button type="button" id="note-cancel" class="btn btn-ghost btn-block">Abbrechen</button>
+    </div>
+  </div>
+
+  <!-- ========================= Bibliothek ansehen (nur lesen) ========================= -->
+  <div id="library-view-overlay" class="modal-overlay hidden">
+    <div class="modal-box modal-box-tall">
+      <p class="modal-title">Übungs-Bibliothek</p>
+      <p class="modal-text" id="library-view-count"></p>
+      <div id="library-view-list" class="library-list"></div>
+      <button type="button" id="libview-new" class="btn btn-ghost btn-block">+ Eigene Übung anlegen</button>
+      <button type="button" id="library-view-close" class="btn btn-ghost btn-block">Schließen</button>
+    </div>
+  </div>
+
+  <!-- ========================= Eigene Übung anlegen ========================= -->
+  <div id="newex-overlay" class="modal-overlay hidden">
+    <div class="modal-box modal-box-tall">
+      <p class="modal-title">Eigene Übung anlegen</p>
+      <div class="nx-form">
+        <label class="nx-field"><span>Name *</span><input id="nx-name" type="text" placeholder="z. B. Beinheben hängend" /></label>
+        <label class="nx-field"><span>Muskelgruppe</span><input id="nx-muscle" type="text" placeholder="z. B. Bauch" /></label>
+        <div class="nx-row">
+          <label class="nx-field"><span>Sätze</span><input id="nx-sets" type="number" inputmode="numeric" min="0" step="1" placeholder="3" /></label>
+          <label class="nx-field"><span>Wiederholungen</span><input id="nx-reps" type="text" placeholder="8-12" /></label>
+        </div>
+        <div class="nx-row">
+          <label class="nx-field"><span>Gewicht (kg)</span><input id="nx-weight" type="number" inputmode="decimal" min="0" step="0.5" placeholder="z. B. 40" /></label>
+          <label class="nx-field"><span>Pause (Sek.)</span><input id="nx-rest" type="number" inputmode="numeric" min="0" step="5" placeholder="90" /></label>
+        </div>
+        <label class="nx-check"><input id="nx-bw" type="checkbox" /> <span>Körpergewichtsübung (z. B. Klimmzüge)</span></label>
+        <label class="nx-check"><input id="nx-uni" type="checkbox" /> <span>Einseitig (je Seite)</span></label>
+      </div>
+      <p class="import-error" id="nx-error" hidden></p>
+      <button type="button" id="newex-save" class="btn btn-primary btn-block">Übung speichern</button>
+      <button type="button" id="newex-cancel" class="btn btn-ghost btn-block">Abbrechen</button>
+    </div>
+  </div>
+
+  <script src="app.js?v=27"></script>
 </body>
 </html>
