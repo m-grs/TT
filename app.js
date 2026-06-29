@@ -1018,17 +1018,6 @@ function openExercise(id) {
     bwHint.classList.add("hidden");
   }
 
-  // Aktueller Rekord
-  const rec = exerciseRecord(ex.key);
-  const recEl = $("#ex-record");
-  if (rec) {
-    recEl.classList.remove("hidden");
-    recEl.innerHTML = `<span class="rec-trophy">🏆</span> Rekord: <b>${recordValueText(rec.set)}</b> <span class="muted">(${setShort(rec.set)})</span>`;
-  } else {
-    recEl.classList.add("hidden");
-    recEl.innerHTML = "";
-  }
-
   // "Letztes Mal"-Block (vorige Einheit)
   const last = lastSessionFor(ex.key);
   const lastEl = $("#ex-lastlog");
@@ -1395,7 +1384,6 @@ function renderStats() {
   const hasDuration = state.sessions.some(s => s.sets.length && sessionDurationMs(s) > 0);
   const prev = sel.value;
   sel.innerHTML = "";
-  renderPRList();
   if (!exs.length && !hasBW && !hasDuration) {
     sel.innerHTML = "<option>Noch keine Daten</option>";
     $("#chart-wrap").innerHTML = '<p class="chart-empty">Noch keine Trainingsdaten vorhanden.<br>Erfasse erst ein paar Sätze.</p>';
@@ -1407,20 +1395,6 @@ function renderStats() {
   if (hasDuration) { const o = document.createElement("option"); o.value = "__duration__"; o.textContent = "⏱ Trainingszeit"; sel.appendChild(o); }
   if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
   drawChart();
-}
-
-// Liste aller persönlichen Rekorde auf einen Blick
-function renderPRList() {
-  const wrap = $("#pr-list");
-  if (!wrap) return;
-  const items = allLoggedExercises()
-    .map(e => ({ name: e.name, rec: exerciseRecord(e.key) }))
-    .filter(x => x.rec)
-    .sort((a, b) => b.rec.dateISO.localeCompare(a.rec.dateISO) || a.name.localeCompare(b.name)); // neueste Rekorde zuerst
-  if (!items.length) { wrap.innerHTML = ""; return; }
-  wrap.innerHTML = `<h3 class="section-h">🏆 Bestleistungen</h3><div class="pr-list-inner">` +
-    items.map(it => `<div class="pr-row"><span class="pr-name">${it.name}</span><span class="pr-val">${recordValueText(it.rec.set)}</span><span class="pr-date">${relativeOrDate(it.rec.dateISO)}</span></div>`).join("") +
-    `</div>`;
 }
 
 /* ---------- Kalender-Heatmap der Trainingstage ---------- */
@@ -1457,8 +1431,12 @@ function renderHeatmap() {
       rects += `<rect x="${c * (cell + gap)}" y="${r * (cell + gap)}" width="${cell}" height="${cell}" rx="3" class="hm hm-${lvl}"><title>${title}</title></rect>`;
     }
   }
+  const legend = [0, 1, 2, 3, 4].map(l => `<span class="hm-leg hm-leg-${l}"></span>`).join("");
   wrap.innerHTML = `<h3 class="section-h">📅 Trainingstage (18 Wochen)</h3>
-    <div class="hm-scroll"><svg viewBox="0 -14 ${W} ${H + 14}" width="${W}" height="${H + 14}" class="hm-svg">${monthLabels}${rects}</svg></div>`;
+    <div class="hm-card">
+      <div class="hm-scroll"><svg viewBox="0 -14 ${W} ${H + 14}" width="${W}" height="${H + 14}" class="hm-svg">${monthLabels}${rects}</svg></div>
+      <div class="hm-legend"><span>weniger</span>${legend}<span>mehr</span></div>
+    </div>`;
 }
 
 /* ---------- Wochenvolumen pro Muskelgruppe (Trend, Übertraining/Lücken) ---------- */
@@ -1486,17 +1464,16 @@ function renderMuscleTrend() {
     const w = data[m];
     const cur = w[weeks - 1];
     const prevAvg = (w.slice(0, weeks - 1).reduce((a, b) => a + b, 0)) / (weeks - 1);
-    let trend;
-    if (cur === 0) trend = `<span class="mt-flag mt-gap">💤 Lücke</span>`;
-    else if (prevAvg > 0 && cur > prevAvg * 1.5) trend = `<span class="mt-flag mt-over">⚠︎ stark hoch</span>`;
-    else if (cur > prevAvg * 1.05) trend = `<span class="tr-up">▲</span>`;
-    else if (cur < prevAvg * 0.95) trend = `<span class="tr-down">▼</span>`;
-    else trend = `<span class="tr-flat">▬</span>`;
+    let arrow;
+    if (cur === 0) arrow = `<span class="tr-down">▼</span>`;          // Lücke
+    else if (cur > prevAvg * 1.05) arrow = `<span class="tr-up">▲</span>`;
+    else if (cur < prevAvg * 0.95) arrow = `<span class="tr-down">▼</span>`;
+    else arrow = `<span class="tr-flat">▬</span>`;
     const bars = w.map((v, i) => {
       const h = globalMax > 0 ? Math.round(v / globalMax * 100) : 0;
       return `<span class="mt-bar ${i === weeks - 1 ? "mt-bar-cur" : ""}" style="height:${Math.max(3, h)}%" title="Woche -${weeks - 1 - i}: ${formatNum(Math.round(v))} kg"></span>`;
     }).join("");
-    return `<div class="mt-row"><span class="mt-name">${m}</span><div class="mt-bars">${bars}</div><span class="mt-cur">${formatNum(Math.round(cur))} kg</span>${trend}</div>`;
+    return `<div class="mt-row"><span class="mt-name">${m}</span><div class="mt-bars">${bars}</div><span class="mt-arrow">${arrow}</span></div>`;
   }).join("");
 
   wrap.innerHTML = `<h3 class="section-h">💪 Wochenvolumen pro Muskelgruppe</h3>
