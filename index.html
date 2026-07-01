@@ -15,7 +15,7 @@
   <link rel="icon" href="icon-512.png" sizes="512x512" type="image/png" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
 
-  <link rel="stylesheet" href="styles.css?v=27" />
+  <link rel="stylesheet" href="styles.css?v=36" />
 </head>
 <body>
   <!-- ========================= Kopfzeile ========================= -->
@@ -104,9 +104,9 @@
       <div class="exercise-detail">
         <h2 id="ex-name"></h2>
         <div class="target-card" id="ex-target"></div>
-        <div class="ex-record hidden" id="ex-record"></div>
         <div class="lastlog" id="ex-lastlog"></div>
 
+        <p id="prog-hint" class="prog-hint hidden"></p>
         <div class="entry-form">
           <div class="field">
             <label for="in-weight" id="label-weight">Gewicht (kg)</label>
@@ -126,7 +126,6 @@
           </div>
         </div>
         <p id="bw-hint" class="bw-hint hidden"></p>
-        <p id="prog-hint" class="prog-hint hidden"></p>
         <button type="button" id="save-set" class="btn btn-primary btn-block">Satz speichern</button>
 
         <h3 class="sets-heading">Sätze heute</h3>
@@ -155,7 +154,6 @@
       <div id="chart-wrap" class="chart-wrap"></div>
       <div id="stats-table" class="stats-table"></div>
       <div id="pr-history" class="pr-history"></div>
-      <div id="pr-list" class="pr-list"></div>
       <button type="button" id="export-csv" class="btn btn-primary btn-block">Alle Daten als CSV exportieren</button>
     </section>
 
@@ -174,7 +172,6 @@
           <label for="set-bodyweight">Körpergewicht (kg)</label>
           <input id="set-bodyweight" type="number" inputmode="decimal" min="0" step="0.5" placeholder="z. B. 80" />
         </div>
-        <p class="setting-hint">Wird bei Körpergewichtsübungen (z.&nbsp;B. Klimmzügen) zu 1RM &amp; Volumen dazugerechnet.</p>
       </div>
 
       <!-- Training -->
@@ -184,7 +181,6 @@
           <label for="set-weeklygoal">Wochenziel (Einheiten)</label>
           <input id="set-weeklygoal" type="number" inputmode="numeric" min="0" step="1" placeholder="z. B. 3" />
         </div>
-        <p class="setting-hint">Fortschritt &amp; Streak erscheinen in der Auswertung.</p>
         <div class="setting-row toggle">
           <label for="set-keepawake">Bildschirm beim Training anlassen</label>
           <input id="set-keepawake" type="checkbox" />
@@ -196,16 +192,10 @@
       <!-- Pause & Signale -->
       <div class="settings-card">
         <h3 class="settings-card-title">⏱ Pause &amp; Signale</h3>
-        <div class="setting-row">
-          <label for="set-defaultrest">Standard-Pause (Sek.)</label>
-          <input id="set-defaultrest" type="number" inputmode="numeric" min="0" step="5" />
-        </div>
-        <p class="setting-hint">Wird genutzt, wenn eine Übung keine eigene Pausenzeit hat.</p>
         <div class="setting-row toggle">
           <label for="set-notify">Benachrichtigung am Pausenende</label>
           <input id="set-notify" type="checkbox" />
         </div>
-        <p class="setting-hint">Meldet sich, wenn die Pause vorbei ist – auch wenn die App im Hintergrund ist (iPhone ab iOS 16.4, als Home-Bildschirm-App).</p>
         <div class="setting-row toggle">
           <label for="set-sound">Ton am Ende der Pause</label>
           <input id="set-sound" type="checkbox" />
@@ -242,7 +232,7 @@
         <button type="button" id="clear-all" class="btn btn-ghost btn-block danger">Alles zurücksetzen (Plan + Verlauf)</button>
       </div>
 
-      <p class="muted small version">Trainingstracker · v3 · Alle Daten bleiben nur auf diesem Gerät.</p>
+      <p class="muted small version">Trainingstracker · v4 · Alle Daten bleiben nur auf diesem Gerät.</p>
     </section>
 
     <!-- ---------- Zusammenfassung nach dem Training ---------- -->
@@ -318,7 +308,7 @@
   <div id="note-overlay" class="modal-overlay hidden">
     <div class="modal-box">
       <p class="modal-title" id="note-title">Notiz</p>
-      <textarea id="ex-note" rows="4" placeholder="z. B. enger Griff, Sitz Stufe 4, heute erkältet … (nur für die Auswertung/CSV)"></textarea>
+      <textarea id="ex-note" rows="4"></textarea>
       <button type="button" id="note-save" class="btn btn-primary btn-block">Speichern</button>
       <button type="button" id="note-cancel" class="btn btn-ghost btn-block">Abbrechen</button>
     </div>
@@ -359,6 +349,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=27"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>

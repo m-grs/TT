@@ -245,17 +245,15 @@ function daysBetweenISO(a, b) {
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
 }
 const MONTHS_SHORT = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
-// Streak: aufeinanderfolgende Wochen, in denen das Wochenziel erreicht wurde.
-// Ohne Wochenziel: Wochen mit mind. 1 Einheit. Laufende Woche bricht die Serie nicht.
+// Streak: aufeinanderfolgende Wochen mit mind. einer Einheit. Die laufende Woche bricht die Serie nicht.
 function trainingStreak() {
-  const goal = state.settings.weeklyGoal > 0 ? state.settings.weeklyGoal : 1;
   const counts = {};
   state.sessions.forEach(s => { if (!s.sets.length) return; const w = mondayOfISO(s.dateISO); counts[w] = (counts[w] || 0) + 1; });
   let streak = 0, cur = mondayOfISO(todayISO()), first = true;
   for (let i = 0; i < 520; i++) {
-    const c = counts[cur] || 0;
-    if (c >= goal) streak++;
-    else if (!first) break;       // abgeschlossene Woche verfehlt -> Serie endet
+    const trained = (counts[cur] || 0) >= 1;
+    if (trained) streak++;
+    else if (!first) break;       // abgeschlossene Woche ohne Training -> Serie endet
     first = false;
     cur = addDaysISO(cur, -7);
   }
@@ -563,7 +561,13 @@ function renderStartView() {
   }).join("");
 
   const since = state.plan && state.plan.importedAt;
-  $("#plan-since").textContent = since ? `Plan aktiv seit ${relativeOrDate(since)}` : "";
+  if (since) {
+    const d = daysAgo(since);
+    const txt = d <= 0 ? "heute" : d === 1 ? "gestern" : d <= 10 ? `${d} Tagen` : formatDateDE(since);
+    $("#plan-since").textContent = `Plan aktiv seit ${txt}`;
+  } else {
+    $("#plan-since").textContent = "";
+  }
 
   renderBackupReminder();
 }
@@ -927,16 +931,8 @@ function updateAutoBackupUI() {
   if (folderRow) folderRow.classList.toggle("hidden", !autoOn || !hasAPI);
 
   if (desc) {
-    if (!autoOn) {
-      desc.textContent = "Nach jedem abgeschlossenen Training wird automatisch ein Backup gespeichert.";
-    } else if (hasAPI) {
-      const name = state.settings.autoBackupFolderName;
-      desc.textContent = name
-        ? `Backups werden in „${name}" gespeichert.`
-        : "Beim ersten Backup wird einmalig ein Ordner abgefragt.";
-    } else {
-      desc.textContent = "Nach jedem Training wird eine Backup-Datei heruntergeladen – sie landet in Dateien → Downloads.";
-    }
+    const name = state.settings.autoBackupFolderName;
+    desc.textContent = (autoOn && hasAPI && name) ? `Backups werden in „${name}" gespeichert.` : "";
   }
 
   if (folderName) {
@@ -985,9 +981,14 @@ function findExercise(id) {
   return (s && s.extraExercises) ? (s.extraExercises.find(e => e.id === id) || null) : null;
 }
 
+let _lastOpenedExId = null;   // zuletzt geöffnete Übung
+let _inputsDirty = false;     // hat der Nutzer Gewicht/Wdh selbst verändert?
+
 function openExercise(id) {
   const ex = findExercise(id);
   if (!ex) return;
+  // Kehrt man zur selben Übung mit selbst eingetragenen Werten zurück, bleiben diese erhalten
+  const keepInputs = (id === _lastOpenedExId) && _inputsDirty;
   currentExercise = ex;
   editingSetTs = null;
 
@@ -1030,28 +1031,33 @@ function openExercise(id) {
     lastEl.innerHTML = "";
   }
 
-  // Vorschlag für den nächsten Satz (aktualisiert sich nach jedem gespeicherten Satz)
-  refreshSuggestion(ex);
+  // Vorschlag für den nächsten Satz; bei Rückkehr mit eigenen Eingaben nur Hinweis, Felder unverändert
+  refreshSuggestion(ex, keepInputs);
+  if (!keepInputs) _inputsDirty = false;
   updateNoteButton();
 
   renderTodaySets();
+  _lastOpenedExId = id;
   showScreen("screen-exercise");
 }
 
-// Setzt Eingabefelder + Hinweis auf den Vorschlag für den NÄCHSTEN Satz
-function refreshSuggestion(ex) {
+// Setzt den Hinweis (und, außer bei hintOnly, die Eingabefelder) auf den Vorschlag für den nächsten Satz
+function refreshSuggestion(ex, hintOnly) {
   const sugg = nextSetSuggestion(ex);
-  const lv = state.lastValues[ex.key];
-  let w = lv ? lv.weight : (ex.bodyweight ? 0 : (ex.targetWeight != null ? ex.targetWeight : ""));
-  let r = lv ? lv.reps : (firstRepTarget(ex.targetReps) ?? "");
   const progHint = $("#prog-hint");
   if (sugg) {
-    if (sugg.weight !== "" && sugg.weight != null) w = sugg.weight;
-    if (sugg.reps !== "" && sugg.reps != null) r = sugg.reps;
     progHint.classList.remove("hidden");
     progHint.textContent = sugg.text;
   } else {
     progHint.classList.add("hidden");
+  }
+  if (hintOnly) return;
+  const lv = state.lastValues[ex.key];
+  let w = lv ? lv.weight : (ex.bodyweight ? 0 : (ex.targetWeight != null ? ex.targetWeight : ""));
+  let r = lv ? lv.reps : (firstRepTarget(ex.targetReps) ?? "");
+  if (sugg) {
+    if (sugg.weight !== "" && sugg.weight != null) w = sugg.weight;
+    if (sugg.reps !== "" && sugg.reps != null) r = sugg.reps;
   }
   $("#in-weight").value = w === "" ? "" : w;
   $("#in-reps").value = r === "" ? "" : r;
@@ -1142,7 +1148,7 @@ function commitSetEdit(ts, weight, reps) {
   editingSetTs = null;
   saveState();
   renderTodaySets();
-  if (currentExercise) refreshSuggestion(currentExercise);
+  if (currentExercise) refreshSuggestion(currentExercise, _inputsDirty);
 }
 function flashEditRow(ts) {
   const inp = document.querySelector(".set-row.editing .set-edit-r");
@@ -1174,7 +1180,6 @@ function saveSet() {
   saveState();
 
   renderTodaySets();
-  refreshSuggestion(ex);   // Vorschlag + Eingabefelder für den nächsten Satz aktualisieren
 
   // Neuer Rekord? (nur wenn es vorher schon einen gab -> nicht beim allerersten Satz)
   let prText = null;
@@ -1184,6 +1189,13 @@ function saveSet() {
 
   const targetReached = ex.targetSets && (setIndex + 1) >= ex.targetSets;
   startRest(ex.rest ?? state.settings.defaultRest, targetReached, prText);
+
+  if (targetReached) {
+    showScreen("screen-home");            // Soll-Sätze erreicht -> direkt zur Übersicht
+  } else {
+    refreshSuggestion(ex);                // Vorschlag + Eingabefelder für den nächsten Satz
+    _inputsDirty = false;
+  }
 }
 
 function deleteSet(ts) {
@@ -1195,7 +1207,7 @@ function deleteSet(ts) {
     .sort((a, b) => a.ts - b.ts).forEach(s => { s.setIndex = idx++; });
   saveState();
   renderTodaySets();
-  refreshSuggestion(currentExercise);
+  refreshSuggestion(currentExercise, _inputsDirty);
 }
 
 function flashField(sel) {
@@ -1209,10 +1221,12 @@ function flashField(sel) {
    PAUSEN-TIMER – kleiner schwebender Timer unten rechts (blockiert nicht)
    ===================================================================== */
 let restTimer = null, restRemaining = 0, restTotal = 0, restEndTs = 0, restRunning = false, restEnded = false;
+let restExerciseId = null;
 const MINI_CIRC = 2 * Math.PI * 19;
 
 function startRest(seconds, _choiceMode, prText) {
   restEnded = false;
+  restExerciseId = currentExercise ? currentExercise.id : null;
   const mini = $("#rest-mini");
   mini.classList.remove("overtime");
   $("#rest-mini-fg").style.strokeDasharray = MINI_CIRC;
@@ -1236,7 +1250,7 @@ function tickRest() {
   updateRestUI();
 }
 
-// genau bei 00:00: kurzes grünes Aufleuchten + Signal, Timer läuft danach negativ in Pink weiter
+// genau bei 00:00: grünes Aufleuchten, zurück zur Übung/Übersicht, dann negativ weiterzählen
 function onRestZero() {
   restEnded = true;
   notifyRestEnd();
@@ -1245,19 +1259,20 @@ function onRestZero() {
   void f.offsetWidth;               // Animation neu starten
   f.classList.add("show");
   setTimeout(() => f.classList.remove("show"), 650);
+  // Rückkehr: Soll erreicht -> Übersicht, sonst zurück zur pausierten Übung (Eingaben bleiben erhalten)
+  const ex = restExerciseId ? findExercise(restExerciseId) : null;
+  if (!ex || isExerciseDone(ex)) {
+    showScreen("screen-home");
+  } else if (!(currentExercise && currentExercise.id === restExerciseId && $("#screen-exercise").classList.contains("active"))) {
+    openExercise(restExerciseId);
+  }
 }
 
 function updateRestUI() {
   const t = restRemaining;
   const over = t < 0;
-  let label;
-  if (over) {
-    const a = -t;
-    label = "−" + Math.floor(a / 60) + ":" + String(a % 60).padStart(2, "0");
-  } else {
-    const mm = Math.floor(t / 60), ss = t % 60;
-    label = mm > 0 ? `${mm}:${String(ss).padStart(2, "0")}` : String(ss);
-  }
+  // einheitliches Format: reine Sekunden (z. B. 90, nicht 1:30); Overtime negativ (−30)
+  const label = over ? "−" + (-t) : String(t);
   const frac = over ? 1 : (restTotal > 0 ? t / restTotal : 0);
   $("#rest-mini-time").textContent = label;
   $("#rest-mini-fg").style.strokeDashoffset = MINI_CIRC * (1 - frac);
@@ -1698,8 +1713,7 @@ function renderWeekOverview() {
 
   // Trainings-Streak
   const streak = trainingStreak();
-  const wochenWort = streak === 1 ? "Woche" : "Wochen";
-  const streakLabel = state.settings.weeklyGoal > 0 ? wochenWort + " am Ziel" : wochenWort + " in Folge";
+  const streakLabel = (streak === 1 ? "Woche" : "Wochen") + " in Folge";
   const streakHtml = streak >= 1
     ? `<div class="streak-badge"><span class="streak-fire">🔥</span><b>${streak}</b> <span>${streakLabel}</span></div>`
     : "";
@@ -1790,7 +1804,6 @@ function syncSettingsUI() {
   $("#set-weeklygoal").value = state.settings.weeklyGoal ?? "";
   $("#set-keepawake").checked = state.settings.keepAwake !== false;
   $("#set-notify").checked = !!state.settings.notify;
-  $("#set-defaultrest").value = state.settings.defaultRest;
   $("#set-sound").checked = state.settings.sound;
   $("#set-vibrate").checked = state.settings.vibrate;
   const ab = $("#set-autobackup");
@@ -1859,12 +1872,16 @@ function bindEvents() {
   $("#open-note").addEventListener("click", openNoteModal);
   $("#note-save").addEventListener("click", saveExerciseNote);
   $("#note-cancel").addEventListener("click", closeNoteModal);
+  // Manuelle Änderung an Gewicht/Wdh merken -> Werte bleiben bei Rückkehr/Timer-Ablauf erhalten
+  $("#in-weight").addEventListener("input", () => { _inputsDirty = true; });
+  $("#in-reps").addEventListener("input", () => { _inputsDirty = true; });
   $$(".step").forEach(b => b.addEventListener("click", () => {
     const input = $("#" + b.dataset.target), delta = parseFloat(b.dataset.delta);
     let next = (parseFloat(String(input.value).replace(",", ".")) || 0) + delta;
     const allowNeg = b.dataset.target === "in-weight" && currentExercise && currentExercise.bodyweight;
     if (!allowNeg && next < 0) next = 0;
     input.value = Number.isInteger(next) ? next : Math.round(next * 100) / 100;
+    _inputsDirty = true;
   }));
 
   // Pausen-Timer (kleiner Eck-Timer; Tippen beendet die Pause)
@@ -1899,7 +1916,6 @@ function bindEvents() {
       });
     }
   });
-  $("#set-defaultrest").addEventListener("change", e => { state.settings.defaultRest = Math.max(0, parseInt(e.target.value, 10) || 0); saveState(); });
   $("#set-sound").addEventListener("change", e => { state.settings.sound = e.target.checked; saveState(); if (e.target.checked) beep(); });
   $("#set-vibrate").addEventListener("change", e => { state.settings.vibrate = e.target.checked; saveState(); });
   $("#set-autobackup").addEventListener("change", e => {
